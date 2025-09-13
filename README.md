@@ -97,4 +97,4 @@ The name combines "poke" (to prod or nudge something into action) with "Go", ref
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](https://opensource.org/license/mit) for details.
+This project is licensed under the [MIT License](./LICENSE).
