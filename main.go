@@ -14,7 +14,7 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -62,7 +62,6 @@ func main() {
 	case "sighup":
 		sighupCmd := flag.NewFlagSet("sighup", flag.ExitOnError)
 		name := sighupCmd.String("name", "", "Process name to send SIGHUP to (required)")
-		all := sighupCmd.Bool("all", false, "Send signal to all matching processes")
 		verbose := sighupCmd.Bool("verbose", false, "Enable verbose output")
 
 		sighupCmd.Usage = func() {
@@ -72,7 +71,7 @@ func main() {
 			sighupCmd.PrintDefaults()
 			fmt.Fprintf(os.Stderr, "\nExamples:\n")
 			fmt.Fprintf(os.Stderr, "  pokego sighup -name=myapp\n")
-			fmt.Fprintf(os.Stderr, "  pokego sighup -name=custom-exporter -all\n")
+			fmt.Fprintf(os.Stderr, "  pokego sighup -name=custom-exporter\n")
 		}
 
 		if err := sighupCmd.Parse(os.Args[2:]); err != nil {
@@ -84,7 +83,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		if err := doSIGHUP(*name, *all, *verbose); err != nil {
+		if err := doSIGHUP(*name, *verbose); err != nil {
 			log.Fatalf("SIGHUP failed: %v", err)
 		}
 
@@ -150,14 +149,14 @@ func doHTTPRequest(url, method, body string, timeout time.Duration, verbose bool
 	return nil
 }
 
-func doSIGHUP(processName string, all bool, verbose bool) error {
+func doSIGHUP(processName string, verbose bool) error {
 	// Get all processes
 	processes, err := process.Processes()
 	if err != nil {
 		return fmt.Errorf("failed to list processes: %w", err)
 	}
 
-	var foundPIDs []int32
+	// Find first matching process
 	for _, p := range processes {
 		name, err := p.Name()
 		if err != nil {
@@ -166,58 +165,24 @@ func doSIGHUP(processName string, all bool, verbose bool) error {
 
 		// Match process name (exact match or contains)
 		if name == processName || strings.Contains(name, processName) {
-			foundPIDs = append(foundPIDs, p.Pid)
 			if verbose {
 				cmdline, _ := p.Cmdline()
 				log.Printf("Found process: PID=%d, Name=%s, Cmdline=%s", p.Pid, name, cmdline)
 			}
-			if !all {
-				break // Only process first match unless -all is specified
+
+			proc, err := os.FindProcess(int(p.Pid))
+			if err != nil {
+				return fmt.Errorf("failed to find process %d: %w", p.Pid, err)
 			}
+
+			if err := proc.Signal(syscall.SIGHUP); err != nil {
+				return fmt.Errorf("failed to send SIGHUP to PID %d: %w", p.Pid, err)
+			}
+
+			log.Printf("Successfully poked process %s (PID: %d) with SIGHUP", processName, p.Pid)
+			return nil
 		}
 	}
 
-	if len(foundPIDs) == 0 {
-		return fmt.Errorf("no process found with name %q", processName)
-	}
-
-	// Send SIGHUP to found processes
-	successCount := 0
-	var lastErr error
-
-	for _, pid := range foundPIDs {
-		proc, err := os.FindProcess(int(pid))
-		if err != nil {
-			lastErr = fmt.Errorf("failed to find process %d: %w", pid, err)
-			log.Printf("Warning: %v", lastErr)
-			continue
-		}
-
-		if err := proc.Signal(syscall.SIGHUP); err != nil {
-			lastErr = fmt.Errorf("failed to send SIGHUP to PID %d: %w", pid, err)
-			log.Printf("Warning: %v", lastErr)
-			continue
-		}
-
-		log.Printf("Successfully poked process %s (PID: %d) with SIGHUP", processName, pid)
-		successCount++
-	}
-
-	if successCount == 0 {
-		return fmt.Errorf("failed to send signal to any process: %v", lastErr)
-	}
-
-	if all && successCount < len(foundPIDs) {
-		log.Printf("Warning: Only sent signal to %d out of %d processes", successCount, len(foundPIDs))
-	}
-
-	return nil
-}
-
-// Helper function to truncate long strings for logging
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
+	return fmt.Errorf("no process found with name %q", processName)
 }

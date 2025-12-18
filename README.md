@@ -7,7 +7,6 @@ Poke your processes to reload them! A tool for triggering application reloads vi
 - **HTTP reload**: Send POST requests to reload endpoints (follows the `/-/reload` convention)
 - **SIGHUP reload**: Send SIGHUP signals to processes by name
 - **Process matching**: Find processes by exact name or partial match
-- **Batch operations**: Send signals to all matching processes with `-all`
 - **Verbose mode**: Detailed logging for debugging
 
 ## Installation
@@ -44,19 +43,15 @@ Options:
 Send SIGHUP signal to processes by name:
 
 ```bash
-# Send to first matching process
+# Send to matching process
 $ pokego sighup -name=myapp
 
-# Send to all matching processes
-$ pokego sighup -name=custom-exporter -all
-
-# Verbose output to see matched processes
+# Vrbose output to see matched processes
 $ pokego sighup -name=myservice -verbose
 ```
 
 Options:
 - `-name` (required): Process name to match
-- `-all`: Send signal to all matching processes (default: first match only)
 - `-verbose`: Show detailed process information
 
 ## Integration with igotifier
