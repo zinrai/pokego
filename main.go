@@ -14,7 +14,6 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-// Injected at build time by goreleaser (-X main.version/commit/date).
 var (
 	version = "dev"
 	commit  = "none"
@@ -46,9 +45,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Send POST request to reload application\n\n")
 			fmt.Fprintf(os.Stderr, "Options:\n")
 			httpCmd.PrintDefaults()
-			fmt.Fprintf(os.Stderr, "\nExamples:\n")
-			fmt.Fprintf(os.Stderr, "  pokego http -url=http://localhost:8080/-/reload\n")
-			fmt.Fprintf(os.Stderr, "  pokego http -url=http://localhost:9090/-/reload\n")
 		}
 
 		if err := httpCmd.Parse(os.Args[2:]); err != nil {
@@ -74,9 +70,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Send SIGHUP signal to process by name\n\n")
 			fmt.Fprintf(os.Stderr, "Options:\n")
 			sighupCmd.PrintDefaults()
-			fmt.Fprintf(os.Stderr, "\nExamples:\n")
-			fmt.Fprintf(os.Stderr, "  pokego sighup -name=myapp\n")
-			fmt.Fprintf(os.Stderr, "  pokego sighup -name=custom-exporter\n")
 		}
 
 		if err := sighupCmd.Parse(os.Args[2:]); err != nil {
@@ -108,9 +101,6 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  sighup   Send SIGHUP signal to process by name\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
 	fmt.Fprintf(os.Stderr, "  -version  Show version information\n\n")
-	fmt.Fprintf(os.Stderr, "Examples:\n")
-	fmt.Fprintf(os.Stderr, "  pokego http -url=http://localhost:8080/-/reload\n")
-	fmt.Fprintf(os.Stderr, "  pokego sighup -name=myapp\n\n")
 	fmt.Fprintf(os.Stderr, "Use 'pokego <command> -h' for more information about a command.\n")
 }
 
@@ -204,10 +194,11 @@ func doSIGHUP(processName string, verbose bool) error {
 
 	var masters []procInfo
 	for _, m := range matched {
-		if matchedPIDs[m.ppid] {
-			if verbose {
-				log.Printf("Skipping worker: PID=%d (parent PID %d is also a match)", m.pid, m.ppid)
-			}
+		isWorker := matchedPIDs[m.ppid]
+		if isWorker && verbose {
+			log.Printf("Skipping worker: PID=%d (parent PID %d is also a match)", m.pid, m.ppid)
+		}
+		if isWorker {
 			continue
 		}
 		masters = append(masters, m)
@@ -218,14 +209,7 @@ func doSIGHUP(processName string, verbose bool) error {
 	// unrelated daemon sharing the prefix). Refuse rather than signal a process
 	// the caller did not mean.
 	if len(masters) > 1 {
-		var b strings.Builder
-		for i, m := range masters {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			fmt.Fprintf(&b, "%s (PID %d)", m.name, m.pid)
-		}
-		return fmt.Errorf("prefix %q matched multiple master processes (%s), narrow -name to one", processName, b.String())
+		return fmt.Errorf("prefix %q matched multiple master processes (%s), narrow -name to one", processName, formatProcs(masters))
 	}
 
 	// Exactly one master remains. Signal it, never a worker.
@@ -240,4 +224,12 @@ func doSIGHUP(processName string, verbose bool) error {
 	log.Printf("Successfully poked master %s (PID: %d) with SIGHUP", master.name, master.pid)
 
 	return nil
+}
+
+func formatProcs(procs []procInfo) string {
+	parts := make([]string, len(procs))
+	for i, p := range procs {
+		parts[i] = fmt.Sprintf("%s (PID %d)", p.name, p.pid)
+	}
+	return strings.Join(parts, ", ")
 }
