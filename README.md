@@ -6,7 +6,7 @@ Poke your processes to reload them! A tool for triggering application reloads vi
 
 - **HTTP reload**: Send POST requests to reload endpoints (follows the `/-/reload` convention)
 - **SIGHUP reload**: Send SIGHUP signals to processes by name
-- **Process matching**: Find processes by exact name or partial match
+- **Master targeting**: Match processes by name prefix and signal the master, skipping workers
 - **Verbose mode**: Detailed logging for debugging
 
 ## Installation
@@ -71,14 +71,11 @@ igotifier -path="./config" -exec="pokego http -url=http://localhost:3000/-/reloa
 
 ## Process Matching
 
-The SIGHUP command matches processes in two ways:
-1. **Exact match**: Process name exactly matches the provided name
-2. **Partial match**: Process name contains the provided string
+The SIGHUP command selects a target in two steps.
 
-For example, `-name=myapp` will match:
-- `myapp` (exact)
-- `myapp-worker` (contains)
-- `/usr/local/bin/myapp` (contains)
+First it matches every process whose name starts with the given `-name` (a prefix match against the executable name). Then, among the matched processes, it signals the **master**: the process whose parent is not itself a match. Prefork servers such as nginx share one name between the master and its workers, and a config reload must reach the master, so workers (whose parent is the master) are skipped.
+
+A running service has exactly one master, so the match normally resolves to a single process. If the prefix spans more than one independent process tree, for example two separate instances or an unrelated daemon sharing the prefix, the command reports the ambiguity and exits without signaling. Narrow `-name` to select one.
 
 ## Error Handling
 

@@ -14,7 +14,12 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-const version = "0.2.0"
+// Injected at build time by goreleaser (-X main.version/commit/date).
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -24,7 +29,7 @@ func main() {
 
 	// Check for version flag
 	if os.Args[1] == "-version" || os.Args[1] == "--version" {
-		fmt.Printf("pokego version %s\n", version)
+		fmt.Printf("pokego version %s (commit %s, built %s)\n", version, commit, date)
 		os.Exit(0)
 	}
 
@@ -149,40 +154,90 @@ func doHTTPRequest(url, method, body string, timeout time.Duration, verbose bool
 	return nil
 }
 
+type procInfo struct {
+	pid  int32
+	ppid int32
+	name string
+}
+
 func doSIGHUP(processName string, verbose bool) error {
-	// Get all processes
 	processes, err := process.Processes()
 	if err != nil {
 		return fmt.Errorf("failed to list processes: %w", err)
 	}
 
-	// Find first matching process
+	// Collect every process whose name starts with the given prefix.
+	var matched []procInfo
 	for _, p := range processes {
 		name, err := p.Name()
 		if err != nil {
 			continue
 		}
+		if !strings.HasPrefix(name, processName) {
+			continue
+		}
+		ppid, err := p.Ppid()
+		if err != nil {
+			continue
+		}
+		matched = append(matched, procInfo{pid: p.Pid, ppid: ppid, name: name})
 
-		// Match process name (exact match or contains)
-		if name == processName || strings.Contains(name, processName) {
-			if verbose {
-				cmdline, _ := p.Cmdline()
-				log.Printf("Found process: PID=%d, Name=%s, Cmdline=%s", p.Pid, name, cmdline)
-			}
-
-			proc, err := os.FindProcess(int(p.Pid))
-			if err != nil {
-				return fmt.Errorf("failed to find process %d: %w", p.Pid, err)
-			}
-
-			if err := proc.Signal(syscall.SIGHUP); err != nil {
-				return fmt.Errorf("failed to send SIGHUP to PID %d: %w", p.Pid, err)
-			}
-
-			log.Printf("Successfully poked process %s (PID: %d) with SIGHUP", processName, p.Pid)
-			return nil
+		if verbose {
+			cmdline, _ := p.Cmdline()
+			log.Printf("Matched process: PID=%d, PPID=%d, Name=%s, Cmdline=%s", p.Pid, ppid, name, cmdline)
 		}
 	}
 
-	return fmt.Errorf("no process found with name %q", processName)
+	if len(matched) == 0 {
+		return fmt.Errorf("no process found with name %q", processName)
+	}
+
+	// Prefork servers share a name between master and workers, so a name match
+	// alone can land on a worker. A matched process is a master when its parent
+	// is not itself a matched process. Workers are parented by the master and
+	// fall out here. A process tree has no cycles, so at least one master
+	// always remains.
+	matchedPIDs := make(map[int32]bool, len(matched))
+	for _, m := range matched {
+		matchedPIDs[m.pid] = true
+	}
+
+	var masters []procInfo
+	for _, m := range matched {
+		if matchedPIDs[m.ppid] {
+			if verbose {
+				log.Printf("Skipping worker: PID=%d (parent PID %d is also a match)", m.pid, m.ppid)
+			}
+			continue
+		}
+		masters = append(masters, m)
+	}
+
+	// A running service has a single master, so a match that resolves to more
+	// than one master spans unrelated process trees (separate instances, or an
+	// unrelated daemon sharing the prefix). Refuse rather than signal a process
+	// the caller did not mean.
+	if len(masters) > 1 {
+		var b strings.Builder
+		for i, m := range masters {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(&b, "%s (PID %d)", m.name, m.pid)
+		}
+		return fmt.Errorf("prefix %q matched multiple master processes (%s), narrow -name to one", processName, b.String())
+	}
+
+	// Exactly one master remains. Signal it, never a worker.
+	master := masters[0]
+	proc, err := os.FindProcess(int(master.pid))
+	if err != nil {
+		return fmt.Errorf("failed to find process %d: %w", master.pid, err)
+	}
+	if err := proc.Signal(syscall.SIGHUP); err != nil {
+		return fmt.Errorf("failed to send SIGHUP to PID %d: %w", master.pid, err)
+	}
+	log.Printf("Successfully poked master %s (PID: %d) with SIGHUP", master.name, master.pid)
+
+	return nil
 }
