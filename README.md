@@ -9,12 +9,6 @@ Poke your processes to reload them! A tool for triggering application reloads vi
 - **Master targeting**: Match processes by name prefix and signal the master, skipping workers
 - **Verbose mode**: Detailed logging for debugging
 
-## Installation
-
-```bash
-$ go install github.com/zinrai/pokego@latest
-```
-
 ## Usage
 
 ### HTTP Reload
